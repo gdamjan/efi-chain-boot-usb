@@ -8,12 +8,12 @@ Designed to be launched as a systemd-boot entry.
 ## Requirements
 
 - `gnu-efi` — EFI development library
-- `gcc`, `ld`, `objcopy` — standard toolchain
+- `make`, `gcc`, `ld`, `objcopy` — standard toolchain
 
 On Arch Linux:
 
 ```sh
-pacman -S gnu-efi
+pacman -S make gcc gnu-efi
 ```
 
 ## Build
