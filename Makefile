@@ -55,6 +55,7 @@ install: $(TARGET)
 		exit 1; \
 	fi
 	install -D -m 644 $(TARGET) $(DESTDIR)/EFI/usb-boot/$(TARGET)
+	install -D -m 644 usb-boot.conf $(DESTDIR)/loader/entries/usb-boot.conf
 	@echo "Installed to $(DESTDIR)/EFI/usb-boot/$(TARGET)"
 
 .PHONY: all clean install

@@ -39,8 +39,7 @@ sudo cp usb-boot.conf /boot/loader/entries/usb-boot.conf
 Or use the Makefile:
 
 ```sh
-sudo make install DESTDIR=/boot
-sudo cp usb-boot.conf /boot/loader/entries/usb-boot.conf
+sudo make install DESTDIR=/efi
 ```
 
 ## Usage
