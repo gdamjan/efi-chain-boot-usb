@@ -188,6 +188,7 @@ efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *system_table)
 
     InitializeLib(image_handle, system_table);
 
+    Print(L"\nUSB Chain Boot Initiated\n");
     device_count = FindFilesystemDevices(devices, MAX_DEVICES);
 
     selection = ShowMenu(devices, device_count);
