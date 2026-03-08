@@ -4,17 +4,38 @@
 #define MAX_DEVICES 32
 #define BOOTLOADER_PATH L"\\EFI\\BOOT\\BOOTX64.EFI"
 
+/* ------------------------------------------------------------------ */
+/* Device enumeration                                                 */
+/* ------------------------------------------------------------------ */
+
 typedef struct {
     EFI_HANDLE handle;
     EFI_DEVICE_PATH *device_path;
     CHAR16 *description;
 } BootableDevice;
 
-static CHAR16 *
-DevicePathToDescription(EFI_DEVICE_PATH *dp)
+/* Force UEFI to connect all drivers to all controller handles */
+static void
+ConnectAllControllers(void)
 {
-    /* Use the library's device path to text conversion */
-    return DevicePathToStr(dp);
+    EFI_STATUS status;
+    EFI_HANDLE *handles = NULL;
+    UINTN handle_count = 0;
+
+    status = LibLocateHandle(AllHandles, NULL, NULL,
+                             &handle_count, &handles);
+    if (EFI_ERROR(status) || handle_count == 0)
+        return;
+
+    handle_count /= sizeof(EFI_HANDLE);
+
+    for (UINTN i = 0; i < handle_count; i++) {
+        uefi_call_wrapper(BS->ConnectController, 4,
+                          handles[i], NULL, NULL, TRUE);
+    }
+
+    if (handles)
+        FreePool(handles);
 }
 
 static UINTN
@@ -25,33 +46,13 @@ FindFilesystemDevices(BootableDevice *devices, UINTN max_devices)
     UINTN handle_count = 0;
     UINTN count = 0;
 
-    /*
-     * Find all handles with SimpleFileSystem - then check which ones
-     * sit on removable media by walking up to their BlockIO.
-     */
-    status = LibLocateHandle(ByProtocol, &FileSystemProtocol,
-                             NULL, &handle_count, &handles);
+    status = uefi_call_wrapper(BS->LocateHandleBuffer, 5,
+                               ByProtocol, &FileSystemProtocol,
+                               NULL, &handle_count, &handles);
     if (EFI_ERROR(status) || handle_count == 0)
         return 0;
 
-    handle_count /= sizeof(EFI_HANDLE);
-
     for (UINTN i = 0; i < handle_count && count < max_devices; i++) {
-        EFI_BLOCK_IO *block_io;
-
-        status = uefi_call_wrapper(BS->HandleProtocol, 3,
-                                   handles[i],
-                                   &BlockIoProtocol,
-                                   (VOID **)&block_io);
-        if (EFI_ERROR(status))
-            continue;
-
-        if (!block_io->Media->RemovableMedia)
-            continue;
-        if (!block_io->Media->MediaPresent)
-            continue;
-
-        /* Verify the bootloader file exists on this device */
         EFI_FILE_IO_INTERFACE *fs;
         status = uefi_call_wrapper(BS->HandleProtocol, 3,
                                    handles[i],
@@ -74,7 +75,7 @@ FindFilesystemDevices(BootableDevice *devices, UINTN max_devices)
             EFI_DEVICE_PATH *dp = DevicePathFromHandle(handles[i]);
             devices[count].handle = handles[i];
             devices[count].device_path = dp;
-            devices[count].description = DevicePathToDescription(dp);
+            devices[count].description = dp ? DevicePathToStr(dp) : L"(unknown)";
             count++;
         }
 
@@ -87,10 +88,15 @@ FindFilesystemDevices(BootableDevice *devices, UINTN max_devices)
     return count;
 }
 
+/* ------------------------------------------------------------------ */
+/* Menu                                                               */
+/* ------------------------------------------------------------------ */
+
 static UINTN
 ShowMenu(BootableDevice *devices, UINTN count)
 {
     UINTN selected = 0;
+    UINTN event_index;
     EFI_INPUT_KEY key;
 
     while (TRUE) {
@@ -113,10 +119,10 @@ ShowMenu(BootableDevice *devices, UINTN count)
                 Print(L"    [%d] %s\n", i + 1, devices[i].description);
         }
 
-        Print(L"\nUse Up/Down arrows to select, Enter to boot, Escape to exit.\n");
+        Print(L"\nUp/Down to select, Enter to boot, Escape to exit.\n");
 
         uefi_call_wrapper(BS->WaitForEvent, 3, 1,
-                          &ST->ConIn->WaitForKey, &selected);
+                          &ST->ConIn->WaitForKey, &event_index);
         uefi_call_wrapper(ST->ConIn->ReadKeyStroke, 2, ST->ConIn, &key);
 
         if (key.ScanCode == SCAN_UP) {
@@ -133,11 +139,9 @@ ShowMenu(BootableDevice *devices, UINTN count)
     }
 }
 
-static EFI_DEVICE_PATH *
-FileDevicePath2(EFI_HANDLE device, CHAR16 *file_name)
-{
-    return FileDevicePath(device, file_name);
-}
+/* ------------------------------------------------------------------ */
+/* Chain-load                                                         */
+/* ------------------------------------------------------------------ */
 
 static EFI_STATUS
 ChainLoadDevice(EFI_HANDLE image_handle, BootableDevice *device)
@@ -149,7 +153,7 @@ ChainLoadDevice(EFI_HANDLE image_handle, BootableDevice *device)
     Print(L"\nBooting from: %s\n", device->description);
     Print(L"Loading: %s\n", BOOTLOADER_PATH);
 
-    boot_path = FileDevicePath2(device->handle, BOOTLOADER_PATH);
+    boot_path = FileDevicePath(device->handle, BOOTLOADER_PATH);
     if (!boot_path) {
         Print(L"Error: Failed to create device path\n");
         return EFI_NOT_FOUND;
@@ -177,8 +181,11 @@ ChainLoadDevice(EFI_HANDLE image_handle, BootableDevice *device)
     return status;
 }
 
+/* ------------------------------------------------------------------ */
+/* Entry point                                                        */
+/* ------------------------------------------------------------------ */
+
 EFI_STATUS
-EFIAPI
 efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *system_table)
 {
     BootableDevice devices[MAX_DEVICES];
@@ -188,14 +195,18 @@ efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *system_table)
 
     InitializeLib(image_handle, system_table);
 
-    Print(L"\nUSB Chain Boot Initiated\n");
-    device_count = FindFilesystemDevices(devices, MAX_DEVICES);
+    uefi_call_wrapper(ST->ConOut->SetAttribute, 2, ST->ConOut,
+                      EFI_TEXT_ATTR(EFI_WHITE, EFI_BLACK));
+    uefi_call_wrapper(ST->ConOut->ClearScreen, 1, ST->ConOut);
+    uefi_call_wrapper(ST->ConOut->EnableCursor, 2, ST->ConOut, FALSE);
 
+    ConnectAllControllers();
+    device_count = FindFilesystemDevices(devices, MAX_DEVICES);
     selection = ShowMenu(devices, device_count);
 
     if (selection == (UINTN)-1) {
         Print(L"\nNo device selected. Returning to boot manager...\n");
-        uefi_call_wrapper(BS->Stall, 1, 2000000); /* 2 seconds */
+        uefi_call_wrapper(BS->Stall, 1, 2000000);
         return EFI_SUCCESS;
     }
 

@@ -29,7 +29,7 @@ LDFLAGS		= -nostdlib \
 
 LIBS		= -lefi -lgnuefi
 
-OBJCOPY_SECTIONS = -j .text -j .sdata -j .data -j .dynamic \
+OBJCOPY_SECTIONS = -j .text -j .sdata -j .data -j .rodata -j .dynamic \
 		   -j .dynsym -j .rel -j .rela -j .rel.* -j .rela.* \
 		   -j .reloc
 
